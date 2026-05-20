@@ -33,9 +33,7 @@ async function initDb() {
       connectionLimit: 5,
     });
 
-    // test connection immediately
     await db.query("SELECT 1");
-
     console.log("✅ DB connected");
   } catch (err) {
     console.error("❌ DB connection failed:", err.message);
@@ -85,13 +83,11 @@ app.get("/api/db-status", async (_req, res) => {
 });
 
 // =====================
-// BOOTSTRAP (IMPORTANT FIX)
+// BOOTSTRAP (READ DATA)
 // =====================
 app.get("/api/bootstrap", async (_req, res) => {
   if (!db) {
-    return res.status(503).json({
-      error: "DB not configured",
-    });
+    return res.status(503).json({ error: "DB not connected" });
   }
 
   try {
@@ -100,9 +96,7 @@ app.get("/api/bootstrap", async (_req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({
-        error: "No state found",
-      });
+      return res.status(404).json({ error: "No data found" });
     }
 
     const row = rows[0];
@@ -117,9 +111,51 @@ app.get("/api/bootstrap", async (_req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({
-      error: err.message,
-    });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =====================
+// SYNC (SAVE DATA TO DB) ⭐ IMPORTANT
+// =====================
+app.post("/api/sync", async (req, res) => {
+  if (!db) {
+    return res.status(503).json({ error: "DB not connected" });
+  }
+
+  try {
+    const {
+      members = [],
+      trainers = [],
+      payments = [],
+      sessions = [],
+      settings = {},
+      admin = {},
+    } = req.body || {};
+
+    await db.query(
+      `UPDATE app_state SET
+        members = ?,
+        trainers = ?,
+        payments = ?,
+        sessions = ?,
+        settings = ?,
+        admin = ?
+      WHERE id = 1`,
+      [
+        JSON.stringify(members),
+        JSON.stringify(trainers),
+        JSON.stringify(payments),
+        JSON.stringify(sessions),
+        JSON.stringify(settings),
+        JSON.stringify(admin),
+      ]
+    );
+
+    res.json({ ok: true, message: "Data saved to database" });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -133,7 +169,7 @@ app.get(/^\/(?!api).*/, (_req, res) => {
 });
 
 // =====================
-// START SERVER (IMPORTANT FIX ORDER)
+// START SERVER
 // =====================
 initDb().then(() => {
   app.listen(PORT, () => {
