@@ -2,14 +2,11 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import mysql from 'mysql2/promise';
-import dotenv from 'dotenv';
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
 import morgan from 'morgan';
 import bcrypt from 'bcrypt';
-
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,27 +14,38 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ======================
 // Middleware
+// ======================
 app.use(helmet());
 app.use(cors());
 app.use(compression());
 app.use(morgan('combined'));
 app.use(express.json({ limit: '1mb' }));
 
+// ======================
+// DB Pool
+// ======================
 let dbPool = null;
 
+// ======================
 // Helpers
+// ======================
 function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
 function safeObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value)
+  return value &&
+    typeof value === 'object' &&
+    !Array.isArray(value)
     ? value
     : {};
 }
 
-// Initialize DB
+// ======================
+// Initialize Database
+// ======================
 async function initDb() {
   const {
     DB_HOST,
@@ -49,7 +57,7 @@ async function initDb() {
   } = process.env;
 
   if (!DB_HOST || !DB_PORT || !DB_USER || !DB_PASSWORD) {
-    throw new Error('Missing database environment variables');
+    throw new Error('Missing DB environment variables');
   }
 
   dbPool = mysql.createPool({
@@ -58,9 +66,10 @@ async function initDb() {
     user: DB_USER,
     password: DB_PASSWORD,
     database: DB_NAME,
-    ssl: DB_SSL === 'true'
-      ? { rejectUnauthorized: false }
-      : undefined,
+    ssl:
+      DB_SSL === 'true'
+        ? { rejectUnauthorized: false }
+        : undefined,
     connectionLimit: 5,
     waitForConnections: true,
     queueLimit: 0,
@@ -82,10 +91,10 @@ async function initDb() {
     )
   `);
 
-  // Create default admin
-  const defaultPasswordHash = await bcrypt.hash('adminpassword', 10);
+  // Create default admin password hash
+  const passwordHash = await bcrypt.hash('adminpassword', 10);
 
-  // Insert default row if missing
+  // Insert initial row if missing
   await dbPool.query(
     `
     INSERT IGNORE INTO app_state (
@@ -110,16 +119,20 @@ async function initDb() {
       )
     )
     `,
-    [defaultPasswordHash]
+    [passwordHash]
   );
 
   console.log('Database initialized');
 }
 
-// Serve frontend
+// ======================
+// Static Frontend
+// ======================
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Health check
+// ======================
+// Health Check
+// ======================
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -128,7 +141,9 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// Database health
+// ======================
+// DB Status
+// ======================
 app.get('/api/db-status', async (_req, res) => {
   if (!dbPool) {
     return res.status(503).json({
@@ -138,7 +153,9 @@ app.get('/api/db-status', async (_req, res) => {
   }
 
   try {
-    const [rows] = await dbPool.query('SELECT 1 AS ok');
+    const [rows] = await dbPool.query(
+      'SELECT 1 AS ok'
+    );
 
     return res.json({
       connected: true,
@@ -152,7 +169,9 @@ app.get('/api/db-status', async (_req, res) => {
   }
 });
 
-// Bootstrap state
+// ======================
+// Bootstrap App State
+// ======================
 app.get('/api/bootstrap', async (_req, res) => {
   if (!dbPool) {
     return res.status(503).json({
@@ -167,7 +186,7 @@ app.get('/api/bootstrap', async (_req, res) => {
 
     if (!rows.length) {
       return res.status(404).json({
-        error: 'State row not found',
+        error: 'State not found',
       });
     }
 
@@ -214,7 +233,9 @@ app.get('/api/bootstrap', async (_req, res) => {
   }
 });
 
-// Sync state
+// ======================
+// Sync App State
+// ======================
 app.post('/api/sync', async (req, res) => {
   if (!dbPool) {
     return res.status(503).json({
@@ -230,7 +251,6 @@ app.post('/api/sync', async (req, res) => {
     const payments = safeArray(payload.payments);
     const sessions = safeArray(payload.sessions);
     const settings = safeObject(payload.settings);
-
     const admin = safeObject(payload.admin);
 
     const clientVersion =
@@ -245,6 +265,7 @@ app.post('/api/sync', async (req, res) => {
 
     const currentVersion = rows[0]?.version || 0;
 
+    // Prevent overwrite conflicts
     if (clientVersion !== currentVersion) {
       return res.status(409).json({
         error: 'Version conflict',
@@ -252,7 +273,7 @@ app.post('/api/sync', async (req, res) => {
       });
     }
 
-    // Update state
+    // Save state
     await dbPool.query(
       `
       UPDATE app_state
@@ -287,7 +308,9 @@ app.post('/api/sync', async (req, res) => {
   }
 });
 
-// Simple login endpoint
+// ======================
+// Login Endpoint
+// ======================
 app.post('/api/login', async (req, res) => {
   if (!dbPool) {
     return res.status(503).json({
@@ -297,6 +320,12 @@ app.post('/api/login', async (req, res) => {
 
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        error: 'Email and password required',
+      });
+    }
 
     const [rows] = await dbPool.query(
       'SELECT admin FROM app_state WHERE id = 1 LIMIT 1'
@@ -339,12 +368,18 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// SPA fallback
+// ======================
+// SPA Fallback
+// ======================
 app.get(/^\/(?!api).*/, (_req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  res.sendFile(
+    path.join(__dirname, 'dist', 'index.html')
+  );
 });
 
-// Graceful shutdown
+// ======================
+// Graceful Shutdown
+// ======================
 async function shutdown() {
   console.log('Shutting down server...');
 
@@ -364,14 +399,21 @@ async function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-// Start server
+// ======================
+// Start Server
+// ======================
 initDb()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(
+        `Server running on http://localhost:${PORT}`
+      );
     });
   })
   .catch((error) => {
-    console.error('Failed to initialize server:', error);
+    console.error(
+      'Failed to initialize server:',
+      error
+    );
     process.exit(1);
   });
